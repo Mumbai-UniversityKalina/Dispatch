@@ -1,4 +1,4 @@
-"use client"
+"use client";
 
 import { useState, useEffect } from 'react';
 import axios from 'axios';
@@ -22,7 +22,7 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const formatDateForAPI = (date) => {
   const utcDate = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0));
-  return utcDate.toISOString();
+  return utcDate.toISOString().split('T')[0]; // Return only the date part
 };
 
 const formatDateForDisplay = (dateString) => {
@@ -42,7 +42,6 @@ const generateRandomColor = () => {
 export default function DispatchViewer() {
   const [dispatchData, setDispatchData] = useState([]);
   const [collegeData, setCollegeData] = useState([]);
-  const [collegeCache, setCollegeCache] = useState({});
   const [filteredData, setFilteredData] = useState([]);
   const [selectedDate, setSelectedDate] = useState(null);
   const [routeCodeFilter, setRouteCodeFilter] = useState('All');
@@ -52,16 +51,14 @@ export default function DispatchViewer() {
   const [loadingStatus, setLoadingStatus] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [routeCodes, setRouteCodes] = useState(['All']);
+  const [collegeCodes, setCollegeCodes] = useState(['All']);
 
   useEffect(() => {
     if (selectedDate) {
       fetchDispatchData();
     }
   }, [selectedDate]);
-
-  useEffect(() => {
-    applyFilters();
-  }, [routeCodeFilter, collegeCodeFilter, statusFilter, dispatchData, collegeData, currentPage]);
 
   const fetchDispatchData = async () => {
     setLoading(true);
@@ -89,38 +86,30 @@ export default function DispatchViewer() {
         }
       }
       setDispatchData(allDispatchData);
-      localStorage.setItem(`dispatchData-${formattedDate}`, JSON.stringify(allDispatchData));
       setLoadingStatus('Dispatch data fetching complete.');
-      fetchCollegeData(allDispatchData);
+      await fetchCollegeData(allDispatchData);
     } catch (error) {
       console.error('Error fetching dispatch data', error);
       toast.error('Error fetching dispatch data');
       setLoadingStatus('Error fetching dispatch data.');
+      setLoading(false);
     }
   };
 
-  const fetchCollegeData = async (dispatchData) => {
-    setLoading(true);
+  const fetchCollegeData = async (allDispatchData) => {
     setLoadingStatus('Fetching related college data...');
     try {
-      const collegeIds = [...new Set(dispatchData.map(item => item.college))];
+      const collegeIds = [...new Set(allDispatchData.map(item => item.college))];
       let allColleges = [];
 
       for (let i = 0; i < collegeIds.length; i += 5) {  // Fetch 5 colleges in parallel
         const batchIds = collegeIds.slice(i, i + 5);
-        const promises = batchIds.map(id => {
-          if (collegeCache[id]) {
-            return Promise.resolve({ data: collegeCache[id] });
-          } else {
-            return axios.get(`${BASE_URL}${ENDPOINT_GET_COLLEGES}/${id}`, { headers: HEADERS });
-          }
-        });
+        const promises = batchIds.map(id => axios.get(`${BASE_URL}${ENDPOINT_GET_COLLEGES}/${id}`, { headers: HEADERS }));
 
         const responses = await Promise.all(promises);
         for (const response of responses) {
           if (response.status === 200) {
             allColleges.push(response.data);
-            setCollegeCache(prevCache => ({ ...prevCache, [response.data.id]: response.data }));
           }
         }
 
@@ -130,6 +119,7 @@ export default function DispatchViewer() {
       }
       setCollegeData(allColleges);
       setLoadingStatus('College data fetching complete.');
+      applyFilters(allDispatchData, allColleges);
     } catch (error) {
       console.error('Error fetching college data', error);
       toast.error('Error fetching college data');
@@ -139,41 +129,52 @@ export default function DispatchViewer() {
     }
   };
 
-  const applyFilters = () => {
+  const applyFilters = (dispatchData, collegeData) => {
     console.log('Applying filters with the following settings:', {
       routeCodeFilter,
       collegeCodeFilter,
       statusFilter,
       dispatchData,
       collegeData,
+      selectedDate,
     });
 
-    let filtered = [...dispatchData];
+    if (!selectedDate || dispatchData.length === 0 || collegeData.length === 0) {
+      setFilteredData([]);
+      return;
+    }
+
+    let filtered = dispatchData.filter(item => {
+      return item.exam_date.startsWith(formatDateForAPI(selectedDate));
+    });
+
+    console.log('Filtered by date:', filtered);
 
     if (routeCodeFilter !== 'All') {
       filtered = filtered.filter(item => {
         const college = collegeData.find(c => c.id === item.college);
         const collegeRouteCode = college ? Number(college.route_code) : null;
         const routeCodeFilterNumber = Number(routeCodeFilter);
-        console.log('Filtering by route code:', routeCodeFilterNumber, 'College route code:', collegeRouteCode);
         return college && collegeRouteCode === routeCodeFilterNumber;
       });
     }
+
+    console.log('Filtered by route code:', filtered);
+
     if (collegeCodeFilter !== 'All') {
       filtered = filtered.filter(item => {
         const college = collegeData.find(c => c.id === item.college);
-        console.log('Filtering by college code:', collegeCodeFilter, 'College code:', college?.college_id);
         return college && college.college_id === collegeCodeFilter;
       });
     }
+
+    console.log('Filtered by college code:', filtered);
+
     if (statusFilter !== 'All') {
-      filtered = filtered.filter(item => {
-        console.log('Filtering by status:', statusFilter, 'Dispatch status:', item.status);
-        return item.status === statusFilter;
-      });
+      filtered = filtered.filter(item => item.status === statusFilter);
     }
 
-    console.log('Filtered data:', filtered);
+    console.log('Filtered by status:', filtered);
 
     // Group by college and count exams
     const groupedData = filtered.reduce((acc, record) => {
@@ -193,22 +194,17 @@ export default function DispatchViewer() {
     const uniqueDataWithCounts = Object.values(groupedData);
 
     setFilteredData(uniqueDataWithCounts);
+    console.log('Set filtered data:', uniqueDataWithCounts);
+
+    updateFilterOptions(uniqueDataWithCounts);
   };
 
-  const getRouteCodes = () => {
-    const routeCodes = dispatchData.map(item => {
-      const college = collegeData.find(c => c.id === item.college);
-      return college ? college.route_code : null;
-    }).filter(routeCode => routeCode !== null);
-    return ['All', ...new Set(routeCodes)];
-  };
+  const updateFilterOptions = (filteredData) => {
+    const routeCodes = filteredData.map(college => college.route_code);
+    const collegeCodes = filteredData.map(college => college.college_id);
 
-  const getCollegeCodes = () => {
-    const collegeCodes = dispatchData.map(item => {
-      const college = collegeData.find(c => c.id === item.college);
-      return college ? college.college_id : null;
-    }).filter(collegeCode => collegeCode !== null);
-    return ['All', ...new Set(collegeCodes)];
+    setRouteCodes(['All', ...new Set(routeCodes)]);
+    setCollegeCodes(['All', ...new Set(collegeCodes)]);
   };
 
   const handlePageChange = (newPage) => {
@@ -217,10 +213,12 @@ export default function DispatchViewer() {
 
   const handleDateChange = (date) => {
     setSelectedDate(date);
-    setDispatchData([]);
-    setCollegeData([]);
-    setFilteredData([]);
-    localStorage.removeItem(`dispatchData-${formatDateForAPI(date)}`);
+  };
+
+  const handleSearch = () => {
+    if (selectedDate) {
+      fetchDispatchData();
+    }
   };
 
   const paginatedData = filteredData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
@@ -260,7 +258,7 @@ export default function DispatchViewer() {
               className="border p-2 rounded"
               disabled={!selectedDate}
             >
-              {getRouteCodes().map(routeCode => (
+              {routeCodes.map(routeCode => (
                 <option key={routeCode} value={routeCode}>{routeCode}</option>
               ))}
             </select>
@@ -273,7 +271,7 @@ export default function DispatchViewer() {
               className="border p-2 rounded"
               disabled={!selectedDate}
             >
-              {getCollegeCodes().map(collegeCode => (
+              {collegeCodes.map(collegeCode => (
                 <option key={collegeCode} value={collegeCode}>{collegeCode}</option>
               ))}
             </select>
@@ -290,6 +288,15 @@ export default function DispatchViewer() {
               <option value="Pending">Pending</option>
               <option value="complete">Complete</option>
             </select>
+          </div>
+          <div className="flex flex-col justify-end">
+            <button
+              onClick={handleSearch}
+              className="bg-blue-500 text-white py-2 px-4 rounded"
+              disabled={!selectedDate}
+            >
+              Search
+            </button>
           </div>
         </div>
         {loading ? (
@@ -311,7 +318,7 @@ export default function DispatchViewer() {
                 </tr>
               </thead>
               <tbody>
-                {paginatedData.map(college => (
+                {paginatedData.length > 0 ? paginatedData.map(college => (
                   college.exams.map((exam, index) => (
                     <tr key={`${college.id}-${exam.exam_date}-${index}`}>
                       {index === 0 && (
@@ -326,13 +333,16 @@ export default function DispatchViewer() {
                         </>
                       )}
                       <td className="py-2 px-4 border" style={{ backgroundColor: dateColors[exam.exam_date] }}>{formatDateForDisplay(exam.exam_date)}</td>
-                      {exam.status=="Pending" ?
-                      <td className="py-2 px-4 border text-red-600" >{exam.status}</td>:
-                      <td className="py-2 px-4 border text-green-400" >{exam.status}</td>
-}
+                      <td className={`py-2 px-4 border ${exam.status === 'Pending' ? 'text-red-600' : 'text-green-400'}`}>
+                        {exam.status}
+                      </td>
                     </tr>
                   ))
-                ))}
+                )) : (
+                  <tr>
+                    <td colSpan="6" className="py-2 px-4 border text-center">No data available</td>
+                  </tr>
+                )}
               </tbody>
             </table>
             <div className="flex justify-between items-center mt-4">
