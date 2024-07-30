@@ -1,164 +1,202 @@
 "use client"
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import Header from '@/components/header';
-import Footer from '@/components/footer';
-import * as XLSX from 'xlsx';
-import PocketBase from 'pocketbase';
+
 
 const BASE_URL = "https://mucollegdb.pockethost.io";
-const ENDPOINT_POST_DISPATCH = "/api/collections/dispatch/records";
-const ENDPOINT_GET_COLLEGES = "/api/collections/colleges/records";
+const ENDPOINT_GET_STAFF = "/api/collections/dispatchstaff/records";
 const HEADERS = {
     'Content-Type': 'application/json',
     'Authorization': 'Bearer YOUR_ACCESS_TOKEN', // Ensure you replace this with your actual API token
 };
 
-const pb = new PocketBase(BASE_URL);
+const StaffManagement = () => {
+    const [staffList, setStaffList] = useState([]);
+    const [newStaff, setNewStaff] = useState({ staff_name: '', contact_no: '' });
+    const [isEditing, setIsEditing] = useState(false);
+    const [editStaffId, setEditStaffId] = useState(null);
 
-export default function Upload() {
-  const [file, setFile] = useState(null);
+    useEffect(() => {
+        fetchStaffData();
+    }, []);
 
-  const loadFileData = async (file) => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        let data;
-        if (file.name.endsWith('.csv')) {
-          data = e.target.result.split('\n').map(row => row.split(','));
-          const headers = data[0];
-          if (headers.includes('COLL_NO') && headers.includes('COLL_NAME') && headers.includes('EXAM')) {
-            const df = data.slice(1).map(row => ({
-              COLL_NO: row[headers.indexOf('COLL_NO')],
-              COLL_NAME: row[headers.indexOf('COLL_NAME')],
-              EXAM: row[headers.indexOf('EXAM')]
-            }));
-            resolve(df);
-          } else {
-            reject(new Error('Required headers (COLL_NO, COLL_NAME, EXAM) not found'));
-          }
-        } else if (file.name.endsWith('.xlsx')) {
-          const workbook = XLSX.read(e.target.result, { type: 'binary' });
-          const sheetName = workbook.SheetNames[0];
-          const worksheet = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1 });
-          const headers = worksheet[0];
-          if (headers.includes('COLL_NO') && headers.includes('COLL_NAME') && headers.includes('EXAM')) {
-            const df = worksheet.slice(1).map(row => ({
-              COLL_NO: row[headers.indexOf('COLL_NO')],
-              COLL_NAME: row[headers.indexOf('COLL_NAME')],
-              EXAM: row[headers.indexOf('EXAM')]
-            }));
-            resolve(df);
-          } else {
-            reject(new Error('Required headers (COLL_NO, COLL_NAME, EXAM) not found'));
-          }
+    const fetchStaffData = async () => {
+        try {
+            const response = await axios.get(`${BASE_URL}${ENDPOINT_GET_STAFF}`, { headers: HEADERS });
+            if (response.status === 200) {
+                setStaffList(response.data.items);
+            } else {
+                toast.error('Failed to fetch staff data');
+            }
+        } catch (error) {
+            console.error('Error fetching staff data:', error);
+            toast.error('Error fetching staff data');
         }
-      };
-      reader.onerror = (error) => reject(error);
-      if (file.name.endsWith('.csv')) {
-        reader.readAsText(file);
-      } else if (file.name.endsWith('.xlsx')) {
-        reader.readAsBinaryString(file);
-      }
-    });
-  };
+    };
 
-  const getCollegeIdByCollNo = async (collNo) => {
-    const relationApiUrl = `${BASE_URL}${ENDPOINT_GET_COLLEGES}?filter=(college_id="${collNo}")`;
-    const response = await axios.get(relationApiUrl, { headers: HEADERS });
-    if (response.status === 200) {
-      const results = response.data.items;
-      if (results.length > 0) {
-        return results[0].id;
-      }
-    }
-    toast.error(`No matching college found for COLL_NO: ${collNo}`);
-    return null;
-  };
+    const handleInputChange = (e) => {
+        const { name, value } = e.target;
+        setNewStaff({ ...newStaff, [name]: value });
+    };
 
-  const addDataToDb = async (data) => {
-    for (let i = 0; i < data.length; i++) {
-      const row = data[i];
-      const collegeId = await getCollegeIdByCollNo(row.COLL_NO);
-      if (!collegeId) {
-        toast.error(`No matching college found for COLL_NO: ${row.COLL_NO}`);
-        continue;
-      }
-
-      // Convert EXAM date to ISO 8601 format
-      let examDate;
-      try {
-        const [month, day, year] = row.EXAM.toString().split('/');
-        examDate = new Date(row.EXAM).toISOString();
-      } catch (error) {
-        toast.error(`Invalid date format for COLL_NO: ${row.COLL_NO}`);
-        continue;
-      }
-
-      const payload = {
-        college: collegeId,
-        exam_date: examDate,
-        status: "Pending",
-        remark: "No Remarks"
-      };
-
-      try {
-        const record = await pb.collection('dispatch').create(payload);
-        if (record) {
-          toast.success(`Data added successfully for COLL_NO: ${row.COLL_NO}`);
-        } else {
-          toast.error(`Failed to add data for COLL_NO: ${row.COLL_NO}`);
+    const handleAddStaff = async () => {
+        try {
+            const response = await axios.post(`${BASE_URL}${ENDPOINT_GET_STAFF}`, newStaff, { headers: HEADERS });
+            if (response.status === 200 || response.status === 201) {
+                toast.success('Staff added successfully');
+                setStaffList([...staffList, response.data]);
+                setNewStaff({ staff_name: '', contact_no: '' });
+            } else {
+                toast.error('Failed to add staff');
+            }
+        } catch (error) {
+            console.error('Error adding staff:', error);
+            toast.error('Error adding staff');
         }
-      } catch (error) {
-        toast.error(`Failed to add data: ${error.message}`);
-      }
+    };
 
-      if ((i + 1) % 10 === 0) {
-        await new Promise(resolve => setTimeout(resolve, 2000)); // Delay for 2 seconds after every 10 records
-      }
-    }
-  };
+    const handleEditStaff = (staff) => {
+        setNewStaff({ staff_name: staff.staff_name, contact_no: staff.contact_no });
+        setIsEditing(true);
+        setEditStaffId(staff.id);
+    };
 
-  const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
-    setFile(file);
-    try {
-      const data = await loadFileData(file);
-      if (data && confirm('Are you sure you want to upload this data?')) {
-        await addDataToDb(data);
-      }
-    } catch (error) {
-      toast.error(`Failed to load file data: ${error.message}`);
-    }
-  };
+    const handleUpdateStaff = async () => {
+        try {
+            const response = await axios.patch(`${BASE_URL}${ENDPOINT_GET_STAFF}/${editStaffId}`, newStaff, { headers: HEADERS });
+            if (response.status === 200) {
+                toast.success('Staff updated successfully');
+                const updatedList = staffList.map(staff => staff.id === editStaffId ? response.data : staff);
+                setStaffList(updatedList);
+                setNewStaff({ staff_name: '', contact_no: '' });
+                setIsEditing(false);
+                setEditStaffId(null);
+            } else {
+                toast.error('Failed to update staff');
+            }
+        } catch (error) {
+            console.error('Error updating staff:', error);
+            toast.error('Error updating staff');
+        }
+    };
 
-  const handleSubmit = async () => {
-    if (file) {
-      try {
-        const data = await loadFileData(file);
-        await addDataToDb(data);
-      } catch (error) {
-        toast.error(`Failed to load file data: ${error.message}`);
-      }
-    } else {
-      toast.error('Please upload a file first');
-    }
-  };
+    const handleDeleteStaff = async (staffId) => {
+        try {
+            const response = await axios.delete(`${BASE_URL}${ENDPOINT_GET_STAFF}/${staffId}`, { headers: HEADERS });
+            if (response.status === 204) {
+                toast.success('Staff deleted successfully');
+                const filteredList = staffList.filter(staff => staff.id !== staffId);
+                setStaffList(filteredList);
+            } else {
+                toast.error('Failed to delete staff');
+            }
+        } catch (error) {
+            console.error('Error deleting staff:', error);
+            toast.error('Error deleting staff');
+        }
+    };
 
-  return (
-    <div className="flex flex-col min-h-screen">
-      <Header />
-      <main className="flex-grow container mx-auto flex flex-col items-center p-4">
-        <ToastContainer />
-        <div className="flex flex-col space-y-4 items-center mb-4">
-          <input type="file" accept=".csv, .xlsx" onChange={handleFileUpload} className="border p-2 rounded" />
-          <button onClick={handleSubmit} className="bg-blue-500 text-white p-2 rounded">Submit</button>
+    const handleCancelEdit = () => {
+        setNewStaff({ staff_name: '', contact_no: '' });
+        setIsEditing(false);
+        setEditStaffId(null);
+    };
+
+    return (
+      <>
+       <Header />
+        <div className="container mx-auto p-4">
+         
+            <ToastContainer />
+            <h1 className="text-2xl font-bold mb-4">Staff Management</h1>
+            <div className="p-4 border rounded shadow-md mb-4">
+                <h2 className="text-xl font-bold mb-4">{isEditing ? 'Edit Staff' : 'Add New Staff'}</h2>
+                <div className="mb-4">
+                    <label className="block mb-2">Staff Name</label>
+                    <input
+                        type="text"
+                        name="staff_name"
+                        value={newStaff.staff_name}
+                        onChange={handleInputChange}
+                        className="border p-2 rounded w-full"
+                        placeholder="Staff Name"
+                    />
+                </div>
+                <div className="mb-4">
+                    <label className="block mb-2">Contact Number</label>
+                    <input
+                        type="number"
+                        name="contact_no"
+                        value={newStaff.contact_no}
+                        onChange={handleInputChange}
+                        className="border p-2 rounded w-full"
+                        placeholder="Contact Number"
+                    />
+                </div>
+                {isEditing ? (
+                    <div className="flex space-x-2">
+                        <button
+                            onClick={handleUpdateStaff}
+                            className="bg-blue-500 text-white py-2 px-4 rounded"
+                        >
+                            Update Staff
+                        </button>
+                        <button
+                            onClick={handleCancelEdit}
+                            className="bg-gray-500 text-white py-2 px-4 rounded"
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                ) : (
+                    <button
+                        onClick={handleAddStaff}
+                        className="bg-blue-500 text-white py-2 px-4 rounded"
+                    >
+                        Add Staff
+                    </button>
+                )}
+            </div>
+            <table className="min-w-full bg-white">
+                <thead>
+                    <tr>
+                        <th className="py-2 px-4 border">Staff Name</th>
+                        <th className="py-2 px-4 border">Contact Number</th>
+                        <th className="py-2 px-4 border">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {staffList.map(staff => (
+                        <tr key={staff.id}>
+                            <td className="py-2 px-4 border">{staff.staff_name}</td>
+                            <td className="py-2 px-4 border">{staff.contact_no}</td>
+                            <td className="py-2 px-4 border">
+                                <button
+                                    onClick={() => handleEditStaff(staff)}
+                                    className="bg-yellow-500 text-white py-1 px-2 rounded mr-2"
+                                >
+                                    Edit
+                                </button>
+                                <button
+                                    onClick={() => handleDeleteStaff(staff.id)}
+                                    className="bg-red-500 text-white py-1 px-2 rounded"
+                                >
+                                    Delete
+                                </button>
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+           
         </div>
-      </main>
-      <Footer />
-    </div>
-  );
-}
+        
+         </>
+    );
+};
+
+export default StaffManagement;
