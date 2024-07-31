@@ -7,8 +7,10 @@ export default function Header() {
 
   useEffect(() => {
     const user = localStorage.getItem('staffName');
+    console.log("letttt",user);
     if (user) {
       setUserName(user);
+      console.log(user);
     }
   }, []);
 
@@ -18,7 +20,8 @@ export default function Header() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('name');
+    localStorage.removeItem('staffName');
+    localStorage.removeItem('routeCode');
     setUserName(null);
     // Optionally navigate to a logout confirmation page or home page
     router.replace('/');

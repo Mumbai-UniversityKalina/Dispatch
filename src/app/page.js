@@ -51,7 +51,7 @@ const LoginComponent = () => {
       }
     } else {
       if (adminId === 'admin' && adminPassword === 'admin123') {
-        localStorage.setItem('name', 'Admin');
+        localStorage.setItem('staffName', 'Admin');
         router.push('/admin'); // Adjust the path as needed
       } else {
         toast.error('Invalid admin credentials');

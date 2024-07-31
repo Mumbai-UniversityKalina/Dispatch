@@ -13,6 +13,7 @@ import 'react-toastify/dist/ReactToastify.css';
 const BASE_URL = "https://mucollegdb.pockethost.io";
 const ENDPOINT_GET_DISPATCH = "/api/collections/dispatch/records";
 const ENDPOINT_GET_COLLEGES = "/api/collections/colleges/records";
+const ENDPOINT_GET_DISPATCHSTAFF = "/api/collections/dispatchstaff/records";
 const HEADERS = {
     'Content-Type': 'application/json',
     'Authorization': 'Bearer YOUR_ACCESS_TOKEN', // Ensure you replace this with your actual API token
@@ -42,6 +43,7 @@ const generateRandomColor = () => {
 export default function DispatchViewer() {
   const [dispatchData, setDispatchData] = useState([]);
   const [collegeData, setCollegeData] = useState([]);
+  const [staffData, setStaffData] = useState({});
   const [filteredData, setFilteredData] = useState([]);
   const [selectedDate, setSelectedDate] = useState(null);
   const [routeCodeFilter, setRouteCodeFilter] = useState('All');
@@ -59,6 +61,10 @@ export default function DispatchViewer() {
       fetchDispatchData();
     }
   }, [selectedDate]);
+
+  useEffect(() => {
+    applyFilters(dispatchData, staffData);
+  }, [routeCodeFilter, collegeCodeFilter, statusFilter]);
 
   const fetchDispatchData = async () => {
     setLoading(true);
@@ -119,47 +125,81 @@ export default function DispatchViewer() {
       }
       setCollegeData(allColleges);
       setLoadingStatus('College data fetching complete.');
-      applyFilters(allDispatchData, allColleges);
+      await fetchStaffData(allDispatchData);
     } catch (error) {
       console.error('Error fetching college data', error);
       toast.error('Error fetching college data');
       setLoadingStatus('Error fetching college data.');
+    }
+  };
+
+  const fetchStaffData = async (allDispatchData) => {
+    setLoadingStatus('Fetching related staff data...');
+    try {
+      const staffIds = [...new Set(allDispatchData.map(item => item.name))]; // Assuming 'name' field stores the staff ID
+      let allStaff = {};
+
+      for (let i = 0; i < staffIds.length; i += 5) {  // Fetch 5 staff in parallel
+        const batchIds = staffIds.slice(i, i + 5);
+        const promises = batchIds.map(id => axios.get(`${BASE_URL}${ENDPOINT_GET_DISPATCHSTAFF}/${id}`, { headers: HEADERS }));
+
+        const responses = await Promise.all(promises);
+        for (const response of responses) {
+          if (response.status === 200) {
+            allStaff[response.data.id] = response.data;
+          }
+        }
+
+        if (i + 5 < staffIds.length) {
+          await delay(2000); // Add a delay of 2 seconds after every batch of requests
+        }
+      }
+      setStaffData(allStaff);
+      setLoadingStatus('Staff data fetching complete.');
+      applyFilters(allDispatchData, allStaff);
+    } catch (error) {
+      console.error('Error fetching staff data', error);
+      toast.error('Error fetching staff data');
+      setLoadingStatus('Error fetching staff data.');
     } finally {
       setLoading(false);
     }
   };
 
-  const applyFilters = (dispatchData, collegeData) => {
-    console.log('Applying filters with the following settings:', {
-      routeCodeFilter,
-      collegeCodeFilter,
-      statusFilter,
-      dispatchData,
-      collegeData,
-      selectedDate,
-    });
-
+  const applyFilters = (dispatchData, staffData) => {
     if (!selectedDate || dispatchData.length === 0 || collegeData.length === 0) {
       setFilteredData([]);
+      setRouteCodes(['All']);
+      setCollegeCodes(['All']);
       return;
     }
 
-    let filtered = dispatchData.filter(item => {
+    const filteredByDate = dispatchData.filter(item => {
       return item.exam_date.startsWith(formatDateForAPI(selectedDate));
     });
 
-    console.log('Filtered by date:', filtered);
+    const routeCodesSet = new Set();
+    const collegeCodesSet = new Set();
+
+    filteredByDate.forEach(item => {
+      const college = collegeData.find(c => c.id === item.college);
+      if (college) {
+        routeCodesSet.add(college.route_code);
+        collegeCodesSet.add(college.college_id);
+      }
+    });
+
+    setRouteCodes(['All', ...routeCodesSet]);
+    setCollegeCodes(['All', ...collegeCodesSet]);
+
+    let filtered = filteredByDate;
 
     if (routeCodeFilter !== 'All') {
       filtered = filtered.filter(item => {
         const college = collegeData.find(c => c.id === item.college);
-        const collegeRouteCode = college ? Number(college.route_code) : null;
-        const routeCodeFilterNumber = Number(routeCodeFilter);
-        return college && collegeRouteCode === routeCodeFilterNumber;
+        return college && college.route_code === routeCodeFilter;
       });
     }
-
-    console.log('Filtered by route code:', filtered);
 
     if (collegeCodeFilter !== 'All') {
       filtered = filtered.filter(item => {
@@ -168,15 +208,10 @@ export default function DispatchViewer() {
       });
     }
 
-    console.log('Filtered by college code:', filtered);
-
     if (statusFilter !== 'All') {
       filtered = filtered.filter(item => item.status === statusFilter);
     }
 
-    console.log('Filtered by status:', filtered);
-
-    // Group by college and count exams
     const groupedData = filtered.reduce((acc, record) => {
       const college = collegeData.find(c => c.id === record.college);
       if (college) {
@@ -192,19 +227,7 @@ export default function DispatchViewer() {
     }, {});
 
     const uniqueDataWithCounts = Object.values(groupedData);
-
     setFilteredData(uniqueDataWithCounts);
-    console.log('Set filtered data:', uniqueDataWithCounts);
-
-    updateFilterOptions(uniqueDataWithCounts);
-  };
-
-  const updateFilterOptions = (filteredData) => {
-    const routeCodes = filteredData.map(college => college.route_code);
-    const collegeCodes = filteredData.map(college => college.college_id);
-
-    setRouteCodes(['All', ...new Set(routeCodes)]);
-    setCollegeCodes(['All', ...new Set(collegeCodes)]);
   };
 
   const handlePageChange = (newPage) => {
@@ -223,7 +246,6 @@ export default function DispatchViewer() {
 
   const paginatedData = filteredData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
-  // Generate unique background colors for each date
   const dateColors = {};
   filteredData.forEach(college => {
     college.exams.forEach(exam => {
@@ -315,6 +337,7 @@ export default function DispatchViewer() {
                   <th className="py-2 px-4 border">Route Name</th>
                   <th className="py-2 px-4 border">Exam Date</th>
                   <th className="py-2 px-4 border">Status</th>
+                  <th className="py-2 px-4 border">Picked Up By</th>
                 </tr>
               </thead>
               <tbody>
@@ -336,11 +359,14 @@ export default function DispatchViewer() {
                       <td className={`py-2 px-4 border ${exam.status === 'Pending' ? 'text-red-600' : 'text-green-400'}`}>
                         {exam.status}
                       </td>
+                      <td className="py-2 px-4 border">
+                        {staffData[exam.name] ? staffData[exam.name].staff_name : 'Unknown'}
+                      </td>
                     </tr>
                   ))
                 )) : (
                   <tr>
-                    <td colSpan="6" className="py-2 px-4 border text-center">No data available</td>
+                    <td colSpan="7" className="py-2 px-4 border text-center">No data available</td>
                   </tr>
                 )}
               </tbody>
